@@ -1,4 +1,4 @@
-# BARAMEEL WORLD — V20 SUPABASE CONNECTED
+# BARAMEEL WORLD — V20.3 SUPABASE CONNECTED
 
 Clean BARAMEEL WORLD / BARAMEEL RUN master connected to the existing Supabase project.
 
