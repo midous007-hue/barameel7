@@ -1,4 +1,4 @@
-BARAMEEL WORLD V16 — CURRENT ASSET MANIFEST
+BARAMEEL WORLD V15 — CURRENT ASSET MANIFEST
 
 ALREADY INCLUDED — DO NOT DUPLICATE
 ------------------------------------
@@ -45,5 +45,3 @@ assets/collections/collection01/masters/
 
 Keep the 10 master images. Do not create a QR folder inside the collection.
 The pieces are selected by the server-side reward engine, not by printed QR codes.
-
-V18: no legacy per-piece QR files. The only gameplay QR asset is assets/barameel-universal-qr.png.

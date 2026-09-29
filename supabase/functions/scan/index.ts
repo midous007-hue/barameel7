@@ -1,5 +1,70 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-const sb=createClient(Deno.env.get('SUPABASE_URL')!,Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type'}
-Deno.serve(async req=>{if(req.method==='OPTIONS')return new Response('ok',{headers:cors});try{const b=await req.json();const {player_id,qr_token,ticket_id,idempotency_key}=b;if(qr_token!=='BARAMEEL-UNIVERSAL')throw Error('INVALID_QR');if(!player_id||!idempotency_key)throw Error('MISSING_FIELDS');const existing=await sb.from('scans').select('*').eq('idempotency_key',idempotency_key).maybeSingle();if(existing.data)return json({ok:true,reward:existing.data,duplicate:existing.data.duplicate});if(!ticket_id)throw Error('SCAN_TICKET_REQUIRED');const consumed=await sb.rpc('consume_scan_ticket',{p_ticket:ticket_id,p_player:player_id});if(consumed.error||!consumed.data)throw Error('TICKET_INVALID_OR_ALREADY_USED');const draw=await sb.rpc('draw_reward');if(draw.error||!draw.data?.length)throw Error('NO_REWARD_POOL');const r=draw.data[0];const has=await sb.from('player_pieces').select('piece_number').eq('player_id',player_id).eq('collection_id',r.collection_id).eq('image_id',r.image_id).eq('piece_number',r.piece_number).maybeSingle();const duplicate=!!has.data;if(!duplicate){await sb.from('player_pieces').insert({player_id,collection_id:r.collection_id,image_id:r.image_id,piece_number:r.piece_number});}const points=duplicate?Math.round(Number(r.points)*0.1):Number(r.points);const scan=await sb.from('scans').insert({player_id,ticket_id,qr_token,collection_id:r.collection_id,image_id:r.image_id,piece_number:r.piece_number,rarity:r.rarity,points,duplicate,idempotency_key}).select().single();if(scan.error)throw scan.error;const p=await sb.from('players').select('*').eq('id',player_id).single();if(p.data){await sb.from('players').update({total_points:Number(p.data.total_points||0)+points,weekly_points:Number(p.data.weekly_points||0)+points,last_seen_at:new Date().toISOString()}).eq('id',player_id);p.data.total_points=Number(p.data.total_points||0)+points;p.data.weekly_points=Number(p.data.weekly_points||0)+points}await sb.from('scan_tickets').update({consumed_scan_id:scan.data.id}).eq('id',ticket_id);return json({ok:true,reward:{...r,points,duplicate,at:Date.now()},player:p.data})}catch(e){return json({ok:false,error:String(e.message||e) },400)}})
-function json(x,status=200){return new Response(JSON.stringify(x),{status,headers:{...cors,'content-type':'application/json'}})}
+
+
+export const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-player-id, x-idempotency-key",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+
+import { createClient } from "npm:@supabase/supabase-js@2";
+export function adminClient() {
+  const url = Deno.env.get("SUPABASE_URL")!;
+  const keys = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}");
+  const key = keys.default || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!key) throw new Error("Server secret key is not configured");
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+export function publishableKey() {
+  const keys = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
+  return keys.default || Deno.env.get("SUPABASE_ANON_KEY") || "";
+}
+export function json(body: unknown, status=200, headers: Record<string,string>={}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json", ...headers },
+  });
+}
+export function getBearer(req: Request) {
+  const h=req.headers.get("Authorization")||"";
+  return h.startsWith("Bearer ") ? h.slice(7) : "";
+}
+export async function requireUser(req: Request, admin: ReturnType<typeof adminClient>) {
+  const token=getBearer(req);
+  if (!token) return null;
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data.user) return null;
+  return data.user;
+}
+
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", {headers: corsHeaders});
+  if (req.method !== "POST") return json({error:"METHOD_NOT_ALLOWED"},405);
+
+  const admin=adminClient();
+  const user=await requireUser(req,admin);
+  if (!user) return json({error:"AUTH_REQUIRED"},401);
+
+  let body:any={};
+  try { body=await req.json(); } catch { return json({error:"INVALID_JSON"},400); }
+
+  const qr=String(body.qr||"").trim();
+  if(qr!=="BARAMEEL-UNIVERSAL") return json({error:"INVALID_UNIVERSAL_QR"},400);
+
+  const ticketId=String(body.ticket_id||"").trim();
+  const idempotency=String(body.idempotency_key||crypto.randomUUID()).slice(0,120);
+
+  const {data: player}=await admin.from("players").select("id").eq("auth_user_id",user.id).single();
+  if(!player) return json({error:"PLAYER_NOT_INITIALIZED"},409);
+
+  const {data,error}=await admin.rpc("consume_universal_scan",{
+    p_player_id:player.id,p_ticket_id:ticketId,p_idempotency_key:idempotency,p_qr_value:qr
+  });
+  if(error) {
+    const code=String(error.message||"SCAN_FAILED");
+    return json({ok:false,error:code},409);
+  }
+
+  return json(data);
+});

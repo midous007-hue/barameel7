@@ -42,20 +42,23 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", {headers: corsHeaders});
   if (req.method !== "POST") return json({error:"METHOD_NOT_ALLOWED"},405);
 
-  const admin=adminClient();
-  const user=await requireUser(req,admin);
-  if (!user) return json({error:"AUTH_REQUIRED"},401);
+  const adminSecret=Deno.env.get("BARAMEEL_ADMIN_SECRET")||"";
+  const supplied=req.headers.get("x-barameel-admin-secret")||"";
+  if(!adminSecret || supplied!==adminSecret) return json({error:"FORBIDDEN"},403);
 
   let body:any={};
-  try { body=await req.json(); } catch {}
-  const eventName=String(body.event_name||"").slice(0,80);
-  if(!eventName) return json({error:"EVENT_NAME_REQUIRED"},400);
+  try { body=await req.json(); } catch { return json({error:"INVALID_JSON"},400); }
+  const playerCode=String(body.player_code||"").trim();
+  if(!playerCode) return json({error:"PLAYER_CODE_REQUIRED"},400);
 
-  const {data: player}=await admin.from("players").select("id").eq("auth_user_id",user.id).single();
-  if(!player) return json({error:"PLAYER_NOT_INITIALIZED"},409);
+  const {data: player}=await admin.from("players").select("id,player_code").eq("player_code",playerCode).single();
+  if(!player) return json({error:"PLAYER_NOT_FOUND"},404);
 
-  await admin.from("analytics_events").insert({
-    player_id:player.id,event_name:eventName,payload:body.payload||{}
-  });
-  return json({ok:true});
+  const {data: ticket,error}=await admin.from("scan_tickets").insert({
+    player_id:player.id,source:String(body.source||"admin").slice(0,40),
+    metadata:body.metadata||{}
+  }).select("id,issued_at").single();
+
+  if(error) return json({error:error.message},500);
+  return json({ok:true,ticket});
 });
