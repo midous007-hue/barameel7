@@ -1,5 +1,4 @@
 
-import { createClient } from "npm:@supabase/supabase-js@2";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -64,7 +63,8 @@ Deno.serve(async (req) => {
       const {error}=await admin.from("players").insert({auth_user_id:user.id,player_code:code,nickname,runner}).select("*").single();
       if(!error) break;
     }
-    {data: player}=await admin.from("players").select("*").eq("auth_user_id",user.id).single();
+    const retry = await admin.from("players").select("*").eq("auth_user_id",user.id).single();
+    player = retry.data;
   } else {
     const patch:any={};
     if(nickname) patch.nickname=nickname;

@@ -4,8 +4,8 @@
    There is ONE printed QR: BARAMEEL-UNIVERSAL.
 */
 (() => {
-  const VERSION = '20260929-15';
-  const STORAGE = 'barameel.world.player.v15';
+  const VERSION = '20260930-20.4';
+  const STORAGE = 'barameel.world.player.v20.4';
   const API_BASE = String(window.BARAMEEL_API_BASE || '').replace(/\/$/, '');
   const SUPABASE_URL = String(window.BARAMEEL_SUPABASE_URL || '').replace(/\/$/, '');
   const SUPABASE_KEY = String(window.BARAMEEL_SUPABASE_PUBLISHABLE_KEY || '');
@@ -68,10 +68,19 @@
       try{
         if(!window.supabase?.createClient) throw new Error('SUPABASE_CLIENT_UNAVAILABLE');
         if(!supa) supa=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
-        let {data:{session}}=await supa.auth.getSession();
-        if(!session){ const r=await supa.auth.signInAnonymously(); if(r.error) throw r.error; session=r.data.session; }
+        let {data:{session},error:getError}=await supa.auth.getSession();
+        if(getError) throw getError;
+        if(!session){
+          const r=await supa.auth.signInAnonymously();
+          if(r.error) throw r.error;
+          session=r.data.session;
+        }
+        if(!session?.access_token) throw new Error('AUTH_SESSION_MISSING');
         return session;
-      }catch(e){ console.warn('[BARAMEEL AUTH]',e); return null; }
+      }catch(e){
+        console.error('[BARAMEEL AUTH]',e);
+        return null;
+      }
     })();
     return authPromise;
   }
@@ -82,9 +91,15 @@
     try{
       const r=await fetch(API_BASE+path,{method,headers:{'content-type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+session.access_token},body:body?JSON.stringify(body):undefined,cache:'no-store'});
       const data=await r.json().catch(()=>({}));
-      if(!r.ok) return {ok:false,...data,error:data.error||`HTTP_${r.status}`};
+      if(!r.ok){
+        console.error('[BARAMEEL API]',path,r.status,data);
+        return {ok:false,...data,error:data.error||`HTTP_${r.status}`};
+      }
       return data;
-    }catch(e){ console.warn('[BARAMEEL API]',path,e); return {ok:false,code:'NETWORK_ERROR',error:'NETWORK_ERROR'}; }
+    }catch(e){
+      console.error('[BARAMEEL API]',path,e);
+      return {ok:false,code:'NETWORK_ERROR',error:'NETWORK_ERROR'};
+    }
   }
   async function track(event,meta={}){ return api('/analytics',{event_name:event,payload:{...meta,path:location.pathname,ts:Date.now()}}); }
   async function syncPlayer(){ const r=await api('/player',{nickname:state.nickname,runner:state.runner}); if(r?.player) mergePlayer(r.player); return r; }
@@ -123,5 +138,5 @@
     return null;
   }
   window.BR={VERSION,RUNNERS,RUNNER_NAMES,get state(){return state},setNickname,setRunner,selected,pieces,hasPiece,count,mergePlayer,play,playSelect,playCompletionSound,playPointsCountUp,go,goAfter,idle,preload,preloadAll,flash,api,track,syncPlayer,scanUniversal,duoLink,fetchCollection,parseUniversalQR,saveState,API_BASE,ensureAuth};
-  idle(()=>{ ensureAuth().then(()=>syncPlayer().catch(()=>{})); });
+  idle(async()=>{ const r=await syncPlayer(); try{sessionStorage.setItem('barameelPlayerSync',JSON.stringify({ok:!!r?.ok,code:r?.code||null,error:r?.error||null,ts:Date.now()}));}catch{} });
 })();
